@@ -29,8 +29,14 @@ TILES_PER_DEGREE = 2
 LANGUAGES = ("en", "bn", "ar", "ur")
 
 
+class TooLarge(Exception):
+    """The service answered, but the area holds more than one request can return."""
+
+
 def run_query(query, attempts, max_seconds):
-    """Returns the elements, or None if the service would not answer."""
+    """Returns the elements. Raises TooLarge if the area must be split, and stops
+    the whole run if the service stays unavailable, so a bad day never publishes
+    half the world."""
     for attempt in range(1, attempts + 1):
         # curl is used for the download because the Python bundled with macOS cannot
         # complete a secure connection to this server.
@@ -39,17 +45,23 @@ def run_query(query, attempts, max_seconds):
              "--data-urlencode", "data=" + query, ENDPOINT],
             capture_output=True,
         )
+        if result.returncode == 28:
+            raise TooLarge("no answer within %ds" % max_seconds)
         if result.returncode == 0:
             try:
-                return json.loads(result.stdout.decode("utf-8"))["elements"]
+                reply = json.loads(result.stdout.decode("utf-8"))
+                # A query that ran out of time or memory still replies, with a remark and partial data.
+                if reply.get("remark"):
+                    raise TooLarge(reply["remark"])
+                return reply["elements"]
             except (ValueError, KeyError) as error:
                 problem = "unreadable reply: %s" % error
         else:
             problem = result.stderr.decode("utf-8", "replace").strip() or "curl exit %d" % result.returncode
-        wait = 30 * attempt
+        wait = 60 * attempt
         print("  attempt %d failed (%s); waiting %ds" % (attempt, problem, wait), flush=True)
         time.sleep(wait)
-    return None
+    raise SystemExit("Overpass is not answering; nothing was written. Try again later.")
 
 
 FILTER = 'nwr["amenity"="place_of_worship"]["religion"="muslim"]'
@@ -57,20 +69,25 @@ FILTER = 'nwr["amenity"="place_of_worship"]["religion"="muslim"]'
 
 def fetch_world():
     print("Fetching the whole world in one request", flush=True)
-    return run_query("[out:json][timeout:900][maxsize:2000000000];%s;out center tags;" % FILTER, 2, 1200)
+    try:
+        return run_query("[out:json][timeout:900][maxsize:2000000000];%s;out center tags;" % FILTER, 2, 1200)
+    except TooLarge as reason:
+        print("  too much for one request (%s); going area by area" % reason, flush=True)
+        return None
 
 
 def fetch_area(south, west, north, east, add):
     """Fetches one rectangle, splitting it into quarters when it is too much for one request."""
     print("Fetching %.2f,%.2f to %.2f,%.2f" % (south, west, north, east), flush=True)
     query = "[out:json][timeout:170];%s(%s,%s,%s,%s);out center tags;" % (FILTER, south, west, north, east)
-    elements = run_query(query, 3, 200)
-    if elements is not None:
-        add(elements)
+    try:
+        add(run_query(query, 6, 200))
         time.sleep(3)  # be polite to the shared service
         return
-    if north - south <= 0.5:
-        raise SystemExit("Overpass did not answer for %s,%s,%s,%s" % (south, west, north, east))
+    except TooLarge as reason:
+        if north - south <= 0.5:
+            raise SystemExit("Area %s,%s,%s,%s cannot be fetched: %s" % (south, west, north, east, reason))
+        print("  splitting (%s)" % reason, flush=True)
     mid_lat, mid_lon = (south + north) / 2, (west + east) / 2
     for cell in ((south, west, mid_lat, mid_lon), (south, mid_lon, mid_lat, east),
                  (mid_lat, west, north, mid_lon), (mid_lat, mid_lon, north, east)):
@@ -116,7 +133,8 @@ def main():
         add(world)
     else:
         # Either one region was asked for, or the single world request failed: go area by area.
-        south, west, north, east = args.bbox or (-56.0, -180.0, 72.0, 180.0)
+        # Nothing is mapped south of 50 S or north of 72 N.
+        south, west, north, east = args.bbox or (-50.0, -180.0, 72.0, 180.0)
         lat = south
         while lat < north:
             lon = west
