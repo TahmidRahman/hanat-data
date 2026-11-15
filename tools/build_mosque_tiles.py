@@ -74,6 +74,10 @@ def fetch_world():
     except TooLarge as reason:
         print("  too much for one request (%s); going area by area" % reason, flush=True)
         return None
+    except SystemExit:
+        # The single big request is the one most often refused; smaller ones may still get through.
+        print("  the world request was refused; going area by area", flush=True)
+        return None
 
 
 def fetch_area(south, west, north, east, add):
