@@ -1,10 +1,11 @@
 name: Refresh mosque data
 
-# Rebuilds the area files from OpenStreetMap on the first day of each month.
+# Rebuilds the area files from OpenStreetMap every Monday. Countries that fail on
+# one run keep their earlier data and are picked up by a later run.
 # It can also be started by hand from the Actions tab.
 on:
   schedule:
-    - cron: "17 3 1 * *"
+    - cron: "17 3 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -22,13 +23,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build area files
-        run: python3 -u tools/build_mosque_tiles.py --out v1
+        run: python3 -u tools/build_mosque_tiles.py
 
       - name: Publish if anything changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A v1
+          git add -A v1 countries coverage.json
           if git diff --cached --quiet; then
             echo "No changes."
           else
