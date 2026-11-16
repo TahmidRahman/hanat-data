@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 ENDPOINT = "https://overpass-api.de/api/interpreter"
 FILTER = 'nwr["amenity"="place_of_worship"]["religion"="muslim"]'
@@ -33,6 +34,11 @@ LANGUAGES = ("en", "bn", "ar", "ur")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COUNTRY_DIR = os.path.join(ROOT, "countries")
 TILE_DIR = os.path.join(ROOT, "v1")
+
+# The public server gives each address two request slots; more parallel requests are refused.
+PARALLEL = int(os.environ.get("HANAT_PARALLEL", "2"))
+# Stop starting new countries after this long, so a run always finishes and publishes what it has.
+TIME_BUDGET_SECONDS = int(os.environ.get("HANAT_TIME_BUDGET", str(4 * 60 * 60)))
 
 # ISO 3166-1 codes, plus XK (Kosovo), which the map uses.
 COUNTRIES = """
@@ -45,6 +51,15 @@ RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF
 TW TZ UA UG US UY UZ VA VC VE VG VI VN VU WF WS XK YE YT ZA ZM ZW
 """.split()
 
+# Fetched first, so that if a run runs out of time it is these that are fresh: roughly the
+# countries with the largest Muslim populations, largest first, then the rest in any order.
+PRIORITY = """
+ID PK IN BD NG EG IR TR DZ SD IQ MA ET AF SA UZ YE MY NE SY ML TN KZ SN GN SO BF AZ TD JO
+CN RU AE LY TJ SL KG PS LB OM KW MR TM XK QA AL BH BA GM DJ MV BN KM TZ KE CI CM UG MZ
+GH ER BJ TG LK MM PH TH FR DE GB US CA IT ES NL BE SE AT CH NO DK AU NZ ZA SG GY SR
+""".split()
+COUNTRIES = PRIORITY + [code for code in COUNTRIES if code not in PRIORITY]
+
 
 class TooLarge(Exception):
     """The service answered, but the request covers more than it can return at once."""
@@ -54,7 +69,7 @@ class Unavailable(Exception):
     """The service would not answer after several tries."""
 
 
-def run_query(query, attempts=4, max_seconds=400):
+def run_query(query, attempts=2, max_seconds=400):
     for attempt in range(1, attempts + 1):
         # curl is used for the download because the Python bundled with macOS cannot
         # complete a secure connection to this server.
@@ -76,7 +91,7 @@ def run_query(query, attempts=4, max_seconds=400):
                 problem = "unreadable reply: %s" % error
         else:
             problem = result.stderr.decode("utf-8", "replace").strip() or "curl exit %d" % result.returncode
-        wait = 45 * attempt
+        wait = 30 * attempt
         print("    attempt %d failed (%s); waiting %ds" % (attempt, problem, wait), flush=True)
         time.sleep(wait)
     raise Unavailable()
@@ -203,31 +218,40 @@ def rebuild_tiles():
 def main():
     wanted = [code.upper() for code in sys.argv[1:]] or COUNTRIES
     os.makedirs(COUNTRY_DIR, exist_ok=True)
-    failed = []
-    down_in_a_row = 0
-    for index, code in enumerate(wanted, 1):
-        print("[%d/%d] %s" % (index, len(wanted), code), flush=True)
+    started = time.time()
+    done, failed, skipped = [], [], []
+
+    def work(code):
+        if time.time() - started > TIME_BUDGET_SECONDS:
+            return code, None, "skipped"
         try:
-            records = fetch_country(code)
+            return code, fetch_country(code), None
         except (Unavailable, TooLarge):
-            failed.append(code)
-            down_in_a_row += 1
-            print("    FAILED; keeping any earlier data for %s" % code, flush=True)
-            if down_in_a_row >= 5:
-                # The service is down, not this country: stop asking, keep what was gathered.
-                failed += wanted[index:]
-                print("  Five failures in a row; stopping early.", flush=True)
-                break
-            continue
-        down_in_a_row = 0
-        with open(os.path.join(COUNTRY_DIR, code + ".json"), "w", encoding="utf-8") as handle:
-            json.dump(records, handle, ensure_ascii=False, separators=(",", ":"))
-        print("    %d mosques" % len(records), flush=True)
-        time.sleep(3)  # be polite to the shared service
+            return code, None, "failed"
+
+    with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
+        futures = [pool.submit(work, code) for code in wanted]
+        for future in as_completed(futures):
+            code, records, problem = future.result()
+            if problem == "skipped":
+                skipped.append(code)
+                continue
+            if problem:
+                # Skip it and carry on; this country keeps whatever data it had before.
+                failed.append(code)
+                print("%s  FAILED, keeping earlier data" % code, flush=True)
+                continue
+            with open(os.path.join(COUNTRY_DIR, code + ".json"), "w", encoding="utf-8") as handle:
+                json.dump(records, handle, ensure_ascii=False, separators=(",", ":"))
+            done.append(code)
+            print("%s  %d mosques  (%d/%d done)" % (code, len(records), len(done), len(wanted)), flush=True)
 
     rebuild_tiles()
+    print("Refreshed %d countries in %.0f minutes." % (len(done), (time.time() - started) / 60))
     if failed:
-        print("Not refreshed this time (%d): %s" % (len(failed), " ".join(failed)))
+        print("Failed this time, kept earlier data (%d): %s" % (len(failed), " ".join(sorted(failed))))
+    if skipped:
+        print("Out of time, left for the next run (%d): %s" % (len(skipped), " ".join(sorted(skipped))))
 
 
 if __name__ == "__main__":

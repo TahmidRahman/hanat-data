@@ -23,6 +23,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build area files
+        # Stops starting new countries after 4 hours so the job ends well inside its limit.
         run: python3 -u tools/build_mosque_tiles.py
 
       - name: Publish if anything changed
