@@ -1,12 +1,17 @@
 name: Refresh mosque data
 
-# Rebuilds the area files from OpenStreetMap every Monday. Countries that fail on
-# one run keep their earlier data and are picked up by a later run.
-# It can also be started by hand from the Actions tab.
+# Rebuilds the area files from OpenStreetMap's country files on Geofabrik every Monday.
+# Regions that fail on one run keep their earlier data and are picked up by a later run.
+# It can also be started by hand from the Actions tab, optionally for named regions only.
 on:
   schedule:
     - cron: "17 3 * * 1"
   workflow_dispatch:
+    inputs:
+      regions:
+        description: "Geofabrik region names, space separated (empty for all)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -22,9 +27,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install osmium
+        run: sudo apt-get update -q && sudo apt-get install -y -q osmium-tool
+
       - name: Build area files
-        # Stops starting new countries after 4 hours so the job ends well inside its limit.
-        run: python3 -u tools/build_mosque_tiles.py
+        # Country files are downloaded to the runner's large scratch disk and deleted once read.
+        # Stops starting new regions after 4 hours so the job ends well inside its limit.
+        run: |
+          sudo mkdir -p /mnt/hanat && sudo chown "$USER" /mnt/hanat
+          python3 -u tools/build_mosque_tiles.py ${{ inputs.regions }}
+        env:
+          HANAT_WORK: /mnt/hanat
 
       - name: Publish if anything changed
         run: |

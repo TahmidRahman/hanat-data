@@ -8,10 +8,12 @@ Mosque locations for the Hanat prayer app, as small files the app downloads on d
   `name` is empty when the map has none; `women` is `1` only where the map says
   women are provided for.
 
-The files are rebuilt from OpenStreetMap every week by `tools/build_mosque_tiles.py`
-(see `.github/workflows/refresh.yml`), one country at a time. `countries/` holds each
-country's last successful result and `coverage.json` the number of mosques per country. Coverage is only as complete as the map,
-and varies a great deal between countries.
+The files are rebuilt every week by `tools/build_mosque_tiles.py` (see
+`.github/workflows/refresh.yml`) from OpenStreetMap's country files on
+[Geofabrik](https://download.geofabrik.de/), one country or region at a time.
+`countries/` holds each region's last successful result and `coverage.json` the
+number of mosques per region. Coverage is only as complete as the map, and varies a
+great deal between countries.
 
 ## Licence
 
