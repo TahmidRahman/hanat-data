@@ -71,7 +71,9 @@ us-midwest us-northeast us-pacific us-south us-west
 
 def regions_from_index():
     """Every region directly under a continent, leaving out Geofabrik's overlapping extra groupings."""
-    raw = subprocess.run(["curl", "-sS", "--fail", "-A", USER_AGENT, INDEX_URL], capture_output=True, check=True).stdout
+    # Retried for a few minutes: one run failed because the server briefly refused connections.
+    raw = subprocess.run(["curl", "-sS", "--fail", "-A", USER_AGENT, "--retry", "6", "--retry-all-errors",
+                          "--retry-delay", "30", INDEX_URL], capture_output=True, check=True).stdout
     entries = [feature["properties"] for feature in json.loads(raw)["features"]]
     by_id = {e["id"]: e for e in entries}
     continents = {e["id"] for e in entries if not e.get("parent")}
@@ -151,7 +153,7 @@ def fetch_region(region, url):
     try:
         for attempt in range(1, 4):
             try:
-                run(["curl", "-sS", "--fail", "-L", "-A", USER_AGENT, "--retry", "2", "-o", whole, url], "download")
+                run(["curl", "-sS", "--fail", "-L", "-A", USER_AGENT, "--retry", "3", "--retry-all-errors", "--retry-delay", "30", "-o", whole, url], "download")
                 break
             except Failed:
                 if attempt == 3:
