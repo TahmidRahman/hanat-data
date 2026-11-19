@@ -23,7 +23,7 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4
 
@@ -32,12 +32,14 @@ jobs:
 
       - name: Build area files
         # Country files are downloaded to the runner's large scratch disk and deleted once read.
-        # Stops starting new regions after 4 hours so the job ends well inside its limit.
+        # Stops starting new regions after 4.5 hours so the job ends well inside its limit.
         run: |
           sudo mkdir -p /mnt/hanat && sudo chown "$USER" /mnt/hanat
           python3 -u tools/build_mosque_tiles.py ${{ inputs.regions }}
         env:
           HANAT_WORK: /mnt/hanat
+          HANAT_PARALLEL: "3"
+          HANAT_TIME_BUDGET: "16200"
 
       - name: Publish if anything changed
         run: |

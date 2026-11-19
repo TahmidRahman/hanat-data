@@ -62,6 +62,13 @@ norway denmark australia new-zealand south-africa guyana suriname
 """.split()
 
 
+# Geofabrik's extra groupings, which repeat countries or states listed on their own.
+GROUPINGS = set("""
+alps dach britain-and-ireland great-britain sea south-africa-and-lesotho kaliningrad canary-islands
+us-midwest us-northeast us-pacific us-south us-west
+""".split())
+
+
 def regions_from_index():
     """Every region directly under a continent, leaving out Geofabrik's overlapping extra groupings."""
     raw = subprocess.run(["curl", "-sS", "--fail", "-A", USER_AGENT, INDEX_URL], capture_output=True, check=True).stdout
@@ -71,13 +78,21 @@ def regions_from_index():
     regions = {}
     for e in entries:
         parent = by_id.get(e.get("parent"))
-        if parent is None or parent["id"] not in continents:
+        # Only regions directly under a continent; states and provinces have a "/" in their name.
+        if parent is None or parent["id"] not in continents or "/" in e["id"] or e["id"] in GROUPINGS:
             continue
         # Groupings such as "dach" or "alps" repeat countries that are listed on their own.
         if e["id"] in parent.get("special_regions", []):
             continue
         regions[e["id"]] = e["urls"]["pbf"]
-    ordered = [r for r in PRIORITY if r in regions] + sorted(r for r in regions if r not in PRIORITY)
+    # Regions with no saved result yet come first, so ones left over by a run that ran out of
+    # time are not left over again; then the priority list; then the rest.
+    def missing(r):
+        return not os.path.exists(os.path.join(COUNTRY_DIR, r + ".json"))
+    first = sorted(r for r in regions if missing(r))
+    rest = [r for r in PRIORITY if r in regions and not missing(r)]
+    rest += sorted(r for r in regions if r not in PRIORITY and not missing(r))
+    ordered = first + rest
     return [(r, regions[r]) for r in ordered]
 
 
