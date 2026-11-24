@@ -71,9 +71,21 @@ us-midwest us-northeast us-pacific us-south us-west
 
 def regions_from_index():
     """Every region directly under a continent, leaving out Geofabrik's overlapping extra groupings."""
-    # Retried for a few minutes: one run failed because the server briefly refused connections.
-    raw = subprocess.run(["curl", "-sS", "--fail", "-A", USER_AGENT, "--retry", "6", "--retry-all-errors",
-                          "--retry-delay", "30", INDEX_URL], capture_output=True, check=True).stdout
+    # Geofabrik sometimes refuses connections from GitHub's servers. The list is kept in the
+    # repository after each successful fetch, so a run can go ahead with the saved copy.
+    cached = os.path.join(ROOT, "tools", "geofabrik-index.json")
+    fetched = subprocess.run(["curl", "-sS", "--fail", "-A", USER_AGENT, "--retry", "6", "--retry-all-errors",
+                              "--retry-delay", "30", INDEX_URL], capture_output=True)
+    if fetched.returncode == 0:
+        raw = fetched.stdout
+        with open(cached, "wb") as handle:
+            handle.write(raw)
+    elif os.path.exists(cached):
+        print("Could not fetch the region list from Geofabrik (curl exit %d); using the saved copy." % fetched.returncode)
+        with open(cached, "rb") as handle:
+            raw = handle.read()
+    else:
+        raise SystemExit("Could not fetch the region list from Geofabrik and there is no saved copy.")
     entries = [feature["properties"] for feature in json.loads(raw)["features"]]
     by_id = {e["id"]: e for e in entries}
     continents = {e["id"] for e in entries if not e.get("parent")}
